@@ -1,0 +1,512 @@
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(scales)
+library(cowplot)
+library(grid)
+library(gridExtra)
+library(RColorBrewer)
+library(knitr)
+library(tibble)
+library(tidyr)
+library(png)
+#library(imager)
+library(latexpdf)
+library(tinytex)
+library(maps)
+library(ggmap)
+library(devtools)
+library(chron)
+library(kableExtra)
+library(datasets)
+library(curl)
+library(httr)
+library(forcats)
+library(ROCR)
+library(performanceEstimation)
+library(UBL)
+library(quantmod)
+library(earth)
+library(e1071)
+library(xts)
+library(TTR)
+library(devtools)
+library(randomForest)
+library(nnet)
+library(DMwR2)
+library(zoo)
+install_github("ltorgo/performanceEstimation",ref="develop")
+# Get data for relevent stock from 1990-01-01 to latest close
+GE<-getSymbols("GE",from="1990-01-01",auto.assign=FALSE)
+#**Input parameters**#
+stock_data<- GE # Stock data
+stock_name<- "GE" #Change stock name accordingly
+#Change the column names
+names(stock_data) <-c("Open","High","Low","Close","Volume","Adjusted")
+# Latest date in the stock
+stock_last_date<-index(stock_data)[nrow(stock_data)] # Find the latest date in the stock
+#Create new xts forecasted data
+next_days<- xts(1:7,stock_last_date+1:7)
+next_5wkdays<-next_days[.indexwday(next_days) %in% 1:5] # Get next 5 days during weekdays only
+#Merge the data
+forecast_stock_data <- merge(x = next_5wkdays, y = stock_data)
+forecast_stock_data <- forecast_stock_data[,2:7]
+data_model <- forecast_stock_data$Close
+# ata_model$Close.Lag7 <- lag(forecast_stock_data$Close,7)
+# data_model$Open.Lag7 <- lag(forecast_stock_data$Open,7)
+# data_model$High.Lag7 <- lag(forecast_stock_data$High,7)
+# data_model$Low.Lag7<- lag(forecast_stock_data$Low,7)
+# data_model$Volume.Lag7<- lag(forecast_stock_data$Volume,7)
+# data_model$Adjusted.Lag7<- lag(forecast_stock_data$Adjusted,7)
+# data_model$Close.Lag14 <- lag(forecast_stock_data$Close,14)
+# data_model$Open.Lag14 <- lag(forecast_stock_data$Open,14)
+# data_model$High.Lag14 <- lag(forecast_stock_data$High,14)
+# data_model$Low.Lag14<- lag(forecast_stock_data$Low,14)
+# data_model$Volume.Lag14<- lag(forecast_stock_data$Volume,14)
+# data_model$Adjusted.Lag14<- lag(forecast_stock_data$Adjusted,14)
+# data_model[is.na(data_model)] <- 0
+#Change in price vs. 5, 25 days ago (momentum)
+data_model$Close.M5 <- diff(data_model$Close,5)
+data_model$Close.M25 <- diff(data_model$Close,25)
+data_model$Close.Vol15 <- rollapply(data_model$Close,15, sd)
+data_model$Close.Vol30 <- rollapply(data_model$Close,30, sd)
+#Vol of close = sd(close, last 15, 30 days?)
+#Create dataframe
+df_data_model <- fortify.zoo(data_model)
+names(df_data_model)[1] <- "date"
+df_data_model[is.na(df_data_model)] <- 0
+#General predictive model function
+# model_form <- Close ~ date + Close.Lag7 + Open.Lag7 +
+#                            High.Lag7 + Low.Lag7 + Volume.Lag7 +
+#                            Adjusted.Lag7 +
+#                           Close.Lag14 + Open.Lag14 +
+#                            High.Lag14 + Low.Lag14 + Volume.Lag14 +
+#                            Adjusted.Lag14
+model_form <- Close ~ date + Close.M5 + Close.M25 + Close.Vol15 + Close.Vol30
+# Define date parameters
+training_start_date <-'1990-01-22'
+training_end_date <-'2017-12-31'
+validation_start_date <-'2018-01-01'
+validation_end_date <- as.character(index(data_model)[nrow(data_model)])
+# Define periods for training and validation
+train.window=c(training_start_date,training_end_date)
+validation.window=c(validation_start_date,validation_end_date)
+# Training dataset
+training_data <- na.omit(df_data_model[df_data_model$date >= training_start_date & df_data_model$date <= training_end_date,])
+# Validation dataset
+validation_data <- na.omit(df_data_model[df_data_model$date >= validation_start_date & df_data_model$date <= validation_end_date,])
+# Set up SVM model with dependent and independent variables for training data
+SVM_model <- performanceEstimation(
+PredTask(model_form, training_data,stock_name),
+workflowVariants('timeseriesWF',
+wfID="slideSVM",
+type="slide", relearn.step=90,
+learner='svm',learner.pars=list(cost=c(1,5,10),gamma=0.01)
+),
+## Monte Carlo repeating 5 times
+EstimationTask(method=MonteCarlo(nReps=5,szTrain=0.5,szTest=0.25
+,seed=1234))
+)
+#Save & load model
+#save(SVM_model, file=paste0(stock_name,"_SVM_MODEL.Rdata"))
+#load(paste0(stock_name,"_SVM_model.Rdata"))
+# Plot graph to evaluate workflow
+SVM_model_eval <- subset(SVM_model, metrics=c("mse","mae","rmse"), partial=FALSE)
+plot(SVM_model_eval)
+summary(SVM_model_eval)
+topPerformers(SVM_model_eval, maxs=c(TRUE,TRUE,TRUE))
+getWorkflow("svm.v2",SVM_model_eval)
+getWorkflow("svm.v1",SVM_model_eval)
+#**Input parameters**#
+#Define parameters of the best workflow with the lowest mse
+best_cost=1
+best_gamma=0.01
+#Use the parameters of the best workflow as the predictive model
+SVM_MODEL <- svm(model_form,training_data,cost=best_cost,gamma=best_gamma)
+save(SVM_MODEL,file=paste0(stock_name,"_SVM_MODEL.Rdata"))
+shiny::runApp()
+runApp()
+runApp()
+?diff
+diff(c(1,2,3,4,5))
+diff(c(1,2,3,4,5),2)
+lag(c(1,2,3,4,5),2)
+lag(c(1,2,3,4,5))
+lag(c(1,2,3,4,5))
+cbind.fill(c(1,2,2,3,4),c(1,2,2,3,4))
+rbind.fill(c(1,2,2,3,4),c(1,2,2,3,4))
+library(dplyr)
+rbind.fill(c(1,2,2,3,4),c(1,2,2,3,4))
+library(dplyr)
+library(plyr)
+rbind.fill(c(1,2,2,3,4),c(1,2,2,3,4))
+rbind.fill(c(1,2,2,3,4),c(1,2,2,3,4))
+x <- as.data.frame(c(1,2,2,3,4))
+cbind.fill(diff(x),x)
+rbind.fill(diff(x),x)
+install.packages("rowr")
+library(rowr)
+library(dplyr)
+cbind.fill(diff(x),x)
+cbind.fill(diff(x),x,fill=NA)
+diff(x)
+x
+cbind.fill(diff(x[,1]),x,fill=NA)
+x <- as.data.frame(GE)
+head(x)
+lag(x)
+lag(x$GE.Close)
+x <- head(x)
+x <- head(x$GE.Close)
+diff(x)
+x
+cbind.fill(x,diff(x)
+)
+cbind.fill(x,diff(x),fill=NA)
+?cbind.fill
+x
+rownames(x) <- rownames(head(GE))
+x
+x <- head(x$GE.Close)
+x <- head(GE)
+x
+x <- x[-2:6]
+x <- x[,-2:6]
+x <- x[,-2:3]
+x <- x[,-(2:3)]
+x
+x <- x[,-(2:4)]
+x
+diff(x)
+cbind.fill(x,diff(x), fill=NA)
+plot(cbind.fill(x,diff(x), fill=NA))
+legend("topright",               # location
+c("random points","density probability","Data"),  # elements of legend
+border=c(NA,NA,"black"),  # Color of the border of the boxes (here, only the 3rd element will have a box, bordered with black)
+fill=c(NA,NA,"grey"),     # Color of boxes (here, only the 3rd element will have a box filled with red)
+lty=c(NA,"dashed",NA),    # Line type (here, only the second element of the legend will have a line, dashed)
+pch=c(19,NA,NA),          # Point type (here, only the first element of the legend will have a point)
+col=c("blue","red",NA),   # Colors for the points and lines (the 1st element -the point- will be in blue, while the second element -the line- will be in green)
+bg="#FFFAF0",          # Background color
+bty="o",               # The box type for the whole legend
+pt.cex=1.5,            # Expansion factor for symbols
+cex=0.75,              # Whole legend expansion factor
+title="Legend")        # A title for the legend
+lines(x,dnorm(x),col="red",lty="dashed")
+shiny::runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+?isTruthy
+cbind.fill(x,diff(x), fill=NA)
+cbind.fill(x,diff(x,2), fill=NA)
+View(AAPL)
+runApp()
+# stock_data$High.Lag7 <- lag(stock_data$High,7)
+# stock_data$Low.Lag7<- lag(stock_data$Low,7)
+# stock_data$Volume.Lag7<- lag(stock_data$Volume,7)
+# stock_data$Adjusted.Lag7<- lag(stock_data$Adjusted,7)
+# stock_data$Close.Lag14 <- lag(stock_data$Close,14)
+# stock_data$Open.Lag14 <- lag(stock_data$Open,14)
+# stock_data$High.Lag14 <- lag(stock_data$High,14)
+# stock_data$Low.Lag14<- lag(stock_data$Low,14)
+# stock_data$Volume.Lag14<- lag(stock_data$Volume,14)
+# stock_data$Adjusted.Lag14<- lag(stock_data$Adjusted,14)
+print(cbind(stock_data, diff(stock_data$Close,5), fill=NA))
+# stock_data$High.Lag7 <- lag(stock_data$High,7)
+# stock_data$Low.Lag7<- lag(stock_data$Low,7)
+# stock_data$Volume.Lag7<- lag(stock_data$Volume,7)
+# stock_data$Adjusted.Lag7<- lag(stock_data$Adjusted,7)
+# stock_data$Close.Lag14 <- lag(stock_data$Close,14)
+# stock_data$Open.Lag14 <- lag(stock_data$Open,14)
+# stock_data$High.Lag14 <- lag(stock_data$High,14)
+# stock_data$Low.Lag14<- lag(stock_data$Low,14)
+# stock_data$Volume.Lag14<- lag(stock_data$Volume,14)
+# stock_data$Adjusted.Lag14<- lag(stock_data$Adjusted,14)
+print(cbind(stock_data, x = diff(stock_data$Close,5), fill=NA))
+# stock_data$High.Lag7 <- lag(stock_data$High,7)
+# stock_data$Low.Lag7<- lag(stock_data$Low,7)
+# stock_data$Volume.Lag7<- lag(stock_data$Volume,7)
+# stock_data$Adjusted.Lag7<- lag(stock_data$Adjusted,7)
+# stock_data$Close.Lag14 <- lag(stock_data$Close,14)
+# stock_data$Open.Lag14 <- lag(stock_data$Open,14)
+# stock_data$High.Lag14 <- lag(stock_data$High,14)
+# stock_data$Low.Lag14<- lag(stock_data$Low,14)
+# stock_data$Volume.Lag14<- lag(stock_data$Volume,14)
+# stock_data$Adjusted.Lag14<- lag(stock_data$Adjusted,14)
+print(dim(cbind(stock_data, diff(stock_data$Close,5), fill=NA)))
+# stock_data$High.Lag7 <- lag(stock_data$High,7)
+# stock_data$Low.Lag7<- lag(stock_data$Low,7)
+# stock_data$Volume.Lag7<- lag(stock_data$Volume,7)
+# stock_data$Adjusted.Lag7<- lag(stock_data$Adjusted,7)
+# stock_data$Close.Lag14 <- lag(stock_data$Close,14)
+# stock_data$Open.Lag14 <- lag(stock_data$Open,14)
+# stock_data$High.Lag14 <- lag(stock_data$High,14)
+# stock_data$Low.Lag14<- lag(stock_data$Low,14)
+# stock_data$Volume.Lag14<- lag(stock_data$Volume,14)
+# stock_data$Adjusted.Lag14<- lag(stock_data$Adjusted,14)
+print(tail(cbind(stock_data, diff(stock_data$Close,5), fill=NA)))
+# stock_data$High.Lag7 <- lag(stock_data$High,7)
+# stock_data$Low.Lag7<- lag(stock_data$Low,7)
+# stock_data$Volume.Lag7<- lag(stock_data$Volume,7)
+# stock_data$Adjusted.Lag7<- lag(stock_data$Adjusted,7)
+# stock_data$Close.Lag14 <- lag(stock_data$Close,14)
+# stock_data$Open.Lag14 <- lag(stock_data$Open,14)
+# stock_data$High.Lag14 <- lag(stock_data$High,14)
+# stock_data$Low.Lag14<- lag(stock_data$Low,14)
+# stock_data$Volume.Lag14<- lag(stock_data$Volume,14)
+# stock_data$Adjusted.Lag14<- lag(stock_data$Adjusted,14)
+print(dim(stock_data))
+runApp()
+runApp()
+?cbind
+runApp()
+runApp()
+runApp()
+?cbind.fill
+runApp()
+runApp()
+runApp()
+?names
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+print(tail(stock_data))
+runApp()
+rm(list=ls())
+runApp()
+?merge
+x <- tail(AAPL)
+diff(x)
+merge(x,diff(x))
+runApp()
+runApp()
+diff(x,5)
+diff(x,5)[,5]
+diff(x,5)[,4]
+rollapply(stock_data$Close,15, sd)
+rollapply(AAPL$AAPL.Close,15, sd)
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+?delt
+??delt
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+?tail
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+?matrix
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+?shiny
+?toggle
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+shiny::runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+?dateRangeInput
+runApp()
+runApp()
+shiny::runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+?tabsetPanel
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+install.packages("tbl2xts")
+library(tidyquant)
+# Get AAPL and AMZN Stock Prices
+MEIP <- tq_get("MEIP", get = "stock.prices", from = "2015-09-01", to = "2016-12-31")
+# Get AAPL and AMZN Stock Prices
+MEIP <- tq_get("MEIP", get = "stock.prices", from = "2015-09-01", to = "2016-12-31")
+AMZN <- tq_get("AMZN", get = "stock.prices", from = "2000-01-01", to = "2016-12-31")
+ILMN <- tq_get("ILMN", get = "stock.prices", from = "2000-01-01", to = "2016-12-31")
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidyquant)
+library(dplyr)
+library(xts)
+library(quantmod)
+MEIP %>%
+ggplot(aes(x = date, y = close)) +
+geom_line() +
+labs(title = "AAPL Line Chart", y = "Closing Price", x = "") +
+theme_tq()
+AMZN %>%
+ggplot(aes(x = date, y = close)) +
+geom_barchart(aes(open = open, high = high, low = low, close = close)) +
+labs(title = "AAPL Bar Chart", y = "Closing Price", x = "")
+AMZN %>%
+ggplot(aes(x = date, y = close)) +
+geom_barchart(aes(open = open, high = high, low = low, close = close),
+color_up = "darkgreen", color_down = "darkred", size = 1) +
+labs(title = "AAPL Bar Chart",
+subtitle = "Zoomed in, Experimenting with Formatting",
+y = "Closing Price", x = "") +
+coord_x_date(xlim = c(end - weeks(6), end),
+ylim = c(100, 120)) +
+theme_tq()
+AMZN %>%
+ggplot(aes(x = date, y = close)) +
+geom_barchart(aes(open = open, high = high, low = low, close = close),
+color_up = "darkgreen", color_down = "darkred", size = 1) +
+labs(title = "AAPL Bar Chart",
+subtitle = "Zoomed in, Experimenting with Formatting",
+y = "Closing Price", x = "") +
+theme_tq()
+library(ggplot2)
+AMZN %>%
+ggplot2(aes(x = date, y = close)) +
+geom_barchart(aes(open = open, high = high, low = low, close = close),
+color_up = "darkgreen", color_down = "darkred", size = 1) +
+labs(title = "AAPL Bar Chart",
+subtitle = "Zoomed in, Experimenting with Formatting",
+y = "Closing Price", x = "") +
+theme_tq()
+AMZN %>%
+ggplot(aes(x = date, y = close)) +
+geom_barchart(aes(open = open, high = high, low = low, close = close),
+color_up = "darkgreen", color_down = "darkred", size = 1) +
+labs(title = "AAPL Bar Chart",
+subtitle = "Zoomed in, Experimenting with Formatting",
+y = "Closing Price", x = "") +
+theme_tq()
+AMZN %>%
+ggplot(aes(x = date, y = close)) +
+geom_candlestick(aes(open = open, high = high, low = low, close = close)) +
+labs(title = "AAPL Candlestick Chart", y = "Closing Price", x = "") +
+theme_tq()
+shiny::runApp()
+shiny::runApp()
+rm(list=ls())
+runApp()
